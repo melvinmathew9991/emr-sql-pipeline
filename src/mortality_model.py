@@ -7,6 +7,7 @@ stratified cross-validation scheme, a logistic-regression baseline, and a
 held-out fold for ROC-AUC, precision/recall, and a confusion matrix.
 """
 
+import joblib
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -79,8 +80,18 @@ def train_and_evaluate(X: pd.DataFrame, y: pd.Series, groups: pd.Series, save_di
     logistic-regression baseline is reported alongside the tuned Random
     Forest so the model's added complexity has something to beat. The final
     held-out fold below (same CV scheme) is used only for the plots.
+
+    n_splits is capped at the minority class count: stratified k-fold is
+    undefined if any fold can't contain at least one minority-class sample,
+    which happens on the small synthetic test fixture (only 2 deaths) even
+    though N_CV_SPLITS=5 is appropriate for the real MIMIC-III data (40 deaths).
     """
-    cv = StratifiedGroupKFold(n_splits=N_CV_SPLITS, shuffle=True, random_state=42)
+    n_splits = min(N_CV_SPLITS, int(y.value_counts().min()))
+    if n_splits < N_CV_SPLITS:
+        print(f"[mortality_model] reducing to {n_splits}-fold CV — the minority "
+              f"class only has {int(y.value_counts().min())} members (expected on "
+              f"the small synthetic test fixture)")
+    cv = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=42)
 
     baseline_pipe = Pipeline([
         ("scaler", StandardScaler()),
@@ -89,7 +100,7 @@ def train_and_evaluate(X: pd.DataFrame, y: pd.Series, groups: pd.Series, save_di
     baseline_aucs = cross_val_score(baseline_pipe, X, y, cv=cv, groups=groups, scoring="roc_auc")
     print(f"[mortality_model] Baseline (Logistic Regression) ROC-AUC: "
           f"{baseline_aucs.mean():.3f} +/- {baseline_aucs.std():.3f} "
-          f"({N_CV_SPLITS}-fold CV, grouped by patient)")
+          f"({n_splits}-fold CV, grouped by patient)")
 
     rf_pipe = Pipeline([
         ("scaler", StandardScaler()),
@@ -102,7 +113,7 @@ def train_and_evaluate(X: pd.DataFrame, y: pd.Series, groups: pd.Series, save_di
     rf_cv_aucs = cross_val_score(search.best_estimator_, X, y, cv=cv, groups=groups, scoring="roc_auc")
     print(f"[mortality_model] Random Forest ROC-AUC: "
           f"{rf_cv_aucs.mean():.3f} +/- {rf_cv_aucs.std():.3f} "
-          f"({N_CV_SPLITS}-fold CV, grouped by patient)")
+          f"({n_splits}-fold CV, grouped by patient)")
 
     # Held-out fold for the plots and classification report below — same
     # grouped, stratified scheme as the CV above, so this split is also
@@ -139,7 +150,10 @@ def train_and_evaluate(X: pd.DataFrame, y: pd.Series, groups: pd.Series, save_di
         print("[mortality_model] only one class present in held-out fold — "
               "AUC undefined for this fold (expected on very small samples)")
 
-    cm = confusion_matrix(y_test, y_pred)
+    # labels=[0, 1] forces a consistent 2x2 matrix even if the held-out fold
+    # happens to contain only one class (possible on the small synthetic
+    # fixture), rather than crashing the display with a mismatched shape.
+    cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
     fig, ax = plt.subplots(figsize=(5, 5))
     ConfusionMatrixDisplay(cm, display_labels=["Survived", "Died"]).plot(ax=ax, cmap="Blues")
     ax.set_title("Confusion Matrix — In-Hospital Mortality")
@@ -159,6 +173,13 @@ def train_and_evaluate(X: pd.DataFrame, y: pd.Series, groups: pd.Series, save_di
     fig.savefig(f"{save_dir}/feature_importance.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"[mortality_model] saved feature importance plot to {save_dir}/feature_importance.png")
+
+    # Persist the fitted pipeline (scaler + classifier) alongside the exact
+    # training column schema, so predict.py can one-hot encode a new
+    # admission consistently and score it without retraining.
+    model_path = f"{save_dir}/mortality_model.joblib"
+    joblib.dump({"model": model, "feature_columns": list(X.columns)}, model_path)
+    print(f"[mortality_model] saved trained model to {model_path}")
 
     return model, importances
 

@@ -199,19 +199,61 @@ Updated `README.md` with an explicit "Avoiding leakage" section and a
 comparison; wrote this file; rounded out `.gitignore` with standard entries
 (`.venv/`, `.pytest_cache/`, `.vscode/`, `.idea/`, etc.).
 
+### Phase 7 — Git, then tests + CI + model persistence
+
+Initialized git, pushed to GitHub
+(https://github.com/melvinmathew9991/emr-sql-pipeline).
+
+Then closed the two remaining gaps flagged in Phase 5 ("no automated tests,
+no CI" and "no model persistence or inference path"):
+
+**A real bug surfaced while doing this.** Building the test suite meant
+actually exercising `train_and_evaluate()` against the synthetic fixture for
+the first time since the Phase 5 rewrite — and it crashed.
+`StratifiedGroupKFold(n_splits=5)` is invalid when the minority class has
+only 2 members (the synthetic fixture has 2 deaths in 47 admissions), and
+once that produced `NaN` CV scores, the confusion matrix display then raised
+outright when a held-out fold ended up containing only one class. Fixed
+both: `n_splits` is now capped at `min(N_CV_SPLITS, minority_class_count)`
+with a printed note when it's reduced, and `confusion_matrix(..., labels=[0,
+1])` forces a consistent 2×2 matrix regardless of which classes actually
+appear in a given fold. This means the synthetic-data smoke-test path the
+README has always documented as supported now actually is again.
+
+**Tests added** (`tests/`, 16 tests, `pytest`): one file per pipeline stage,
+covering table loading, descriptive query correctness, the feature table's
+null-handling, a **regression guard asserting the known-leaky columns
+(`hospital_los_days`, `total_icu_los_days`, `n_diagnoses`, `n_icu_stays`)
+can never silently reappear** in the model's feature set, a regression test
+for the crash above, and tests for the new inference path. All run against
+`data/synthetic_test/` only — the real MIMIC data is gitignored, so CI never
+needs it.
+
+**CI added**: `.github/workflows/tests.yml` runs the suite on every push;
+the README now carries a live status badge.
+
+**Model persistence + inference added**: `train_and_evaluate()` now saves
+the fitted pipeline plus its exact training column schema to
+`outputs/mortality_model.joblib` via `joblib`. New `src/predict.py` loads
+that bundle and scores a new admission's mortality risk from its raw
+admission-time fields (age, 24h labs, gender, admission type, care unit),
+reindexing one-hot columns so an unseen category degrades to all-zero
+dummies instead of raising. This was the direct answer to "how would you
+deploy this" — previously there was no way to score a new patient at all.
+
 ---
 
 ## 4. Still open (not fixed, know these going in)
 
-From the Phase 5 audit, not yet addressed:
-- **No model persistence or inference path** — nothing saves the trained
-  model or serves predictions on new admissions; not production-grade.
-- **No automated tests, no CI** — zero test coverage.
+From the Phase 5 audit, addressed in Phase 7: model persistence/inference,
+tests, and CI. Still not addressed:
 - **No survival/time-to-event framing** — mortality is technically censored;
   a static classifier sidesteps that. May belong in a separate project.
 - **Unused SQL-fetched columns** — `admission_location`, `insurance`,
   `ethnicity` are pulled by `cohort_features.sql` and then never analyzed or
   checked for subgroup/fairness performance.
+- **No CLI/config, no logging framework** — `main.py` still hardcodes
+  `USE_SYNTHETIC` and paths; fine for a demo, not "production" in the JD sense.
 - **`sql/` folder was briefly empty/deleted, then reintroduced** — if
   reviewing git history later, don't be confused by that back-and-forth;
   the current state is the final one, with real `.sql` files.
@@ -232,5 +274,12 @@ From the Phase 5 audit, not yet addressed:
   was inflated by both.
 - **"What would you do with more data/time?"** Full MIMIC-III database for
   a stable AUC estimate; survival analysis instead of a static classifier;
-  subgroup fairness checks on ethnicity/insurance; model persistence for
-  actual inference.
+  subgroup fairness checks on ethnicity/insurance.
+- **"How would you deploy this?"** It's already at a first step:
+  `train_and_evaluate()` saves the fitted pipeline to
+  `outputs/mortality_model.joblib`, and `predict.py` loads it to score a new
+  admission from raw fields. Next step for real deployment would be wrapping
+  that in an API, adding input validation, and monitoring for feature drift.
+- **"How do you know the pipeline actually works?"** 16 pytest tests, run on
+  every push via GitHub Actions — including a regression guard that fails
+  the build if the leaky columns are ever reintroduced as model features.

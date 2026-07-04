@@ -10,8 +10,9 @@ __pycache__/
 venv/
 env/
 
-# Generated database — regenerate with `python main.py`
+# Generated database and trained model — regenerate with `python main.py`
 outputs/*.db
+outputs/*.joblib
 
 # Real MIMIC-III demo data — download instructions in README, not redistributed via git
 data/mimic_demo/

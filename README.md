@@ -1,5 +1,7 @@
 # Clinical EMR Data Pipeline & In-Hospital Mortality Prediction (MIMIC-III)
 
+[![Tests](https://github.com/melvinmathew9991/emr-sql-pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/melvinmathew9991/emr-sql-pipeline/actions/workflows/tests.yml)
+
 A SQL-first analytics pipeline on real electronic medical record (EMR) data,
 covering descriptive analytics (cohort characterization, length-of-stay,
 diagnosis patterns) and predictive analytics (in-hospital mortality prediction)
@@ -52,8 +54,14 @@ not a synthetic or toy dataset.
 4. **`mortality_model.py`** — trains a classification model to predict
    in-hospital mortality from admission-time clinical features only (see
    "Avoiding leakage" below), evaluated with a patient-grouped, stratified
-   cross-validation scheme against a logistic-regression baseline — a real
-   predictive analytics task on real clinical outcome data.
+   cross-validation scheme against a logistic-regression baseline, and saves
+   the fitted model to `outputs/mortality_model.joblib` — a real predictive
+   analytics task on real clinical outcome data.
+
+5. **`predict.py`** — loads that saved model and scores a new admission's
+   in-hospital mortality risk from its admission-time features, so the
+   pipeline can actually be used for inference, not just report metrics.
+   Run with `python predict.py` after `main.py` has trained a model.
 
 ## Avoiding leakage
 
@@ -140,6 +148,24 @@ demonstration of catching and correcting the leakage is a stronger portfolio
 signal than the higher, invalid number. The full MIMIC-III database (thousands
 of admissions) would be needed to know whether the Random Forest's edge over
 the baseline is real or noise.
+
+## Tests & CI
+
+`tests/` has a small pytest suite (16 tests) run automatically on every push
+via GitHub Actions (`.github/workflows/tests.yml`) — the badge at the top of
+this README reflects the latest run. Tests run entirely against the
+synthetic fixture in `data/synthetic_test/` (the real MIMIC data is
+gitignored, so CI never needs it), covering all four pipeline stages, the
+leakage guard (`hospital_los_days` etc. can never silently reappear in the
+model's feature set), and a regression test for a real bug this project hit:
+`StratifiedGroupKFold` and the confusion matrix plot both broke on the
+synthetic fixture's tiny minority class (2 deaths) until the code was made to
+adapt `n_splits` accordingly.
+
+```bash
+pip install -r requirements-dev.txt
+pytest -v
+```
 
 ## Testing before you have the real data
 
