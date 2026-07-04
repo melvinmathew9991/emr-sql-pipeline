@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Generated database — regenerate with `python main.py`
+outputs/*.db
+
+# Real MIMIC-III demo data — download instructions in README, not redistributed via git
+data/mimic_demo/
+
+# Claude Code local settings
+.claude/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

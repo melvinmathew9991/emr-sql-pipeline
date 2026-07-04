@@ -1,0 +1,11 @@
+row_id,icd9_code,short_title,long_title
+1,0389,Septicemia NOS,Septicemia NOS
+2,4280,CHF NOS,CHF NOS
+3,5849,Acute kidney failure NOS,Acute kidney failure NOS
+4,486,"Pneumonia, organism NOS","Pneumonia, organism NOS"
+5,5990,Urin tract infection NOS,Urin tract infection NOS
+6,41401,Crnry athrscl natve vssl,Crnry athrscl natve vssl
+7,2724,Hyperlipidemia NEC/NOS,Hyperlipidemia NEC/NOS
+8,25000,DMII wo cmp nt st uncntr,DMII wo cmp nt st uncntr
+9,4019,Hypertension NOS,Hypertension NOS
+10,51881,Acute respiratry failure,Acute respiratry failure
