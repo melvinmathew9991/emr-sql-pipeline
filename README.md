@@ -37,7 +37,10 @@ not a synthetic or toy dataset.
 ## What this project does
 
 1. **`build_database.py`** — loads the raw EMR CSVs into a local SQLite relational
-   database, exactly as a real clinical data warehouse would be structured.
+   database, exactly as a real clinical data warehouse would be structured, and
+   indexes every column used as a join key or filter by `sql/*.sql` (`subject_id`,
+   `hadm_id`, `icd9_code`, `labevents.charttime`) so those joins seek instead of
+   scanning the full table.
 
 2. **`queries.py`** — loads and runs a library of SQL queries from `sql/` answering
    real descriptive-analytics questions directly against the relational schema:
@@ -163,7 +166,7 @@ the baseline is real or noise.
 
 ## Tests & CI
 
-`tests/` has a small pytest suite (19 tests) run automatically on every push
+`tests/` has a small pytest suite (22 tests) run automatically on every push
 via GitHub Actions (`.github/workflows/tests.yml`) — the badge at the top of
 this README reflects the latest run. Tests run entirely against the
 synthetic fixture in `data/synthetic_test/` (the real MIMIC data is
@@ -172,9 +175,11 @@ leakage guard (`hospital_los_days` etc. can never silently reappear in the
 model's feature set), a regression test for a real bug this project hit:
 `StratifiedGroupKFold` and the confusion matrix plot both broke on the
 synthetic fixture's tiny minority class (2 deaths) until the code was made to
-adapt `n_splits` accordingly — and three tests for the `readmission_intervals`
+adapt `n_splits` accordingly — three tests for the `readmission_intervals`
 window-function query (first-admission nulls, per-patient sequence
-numbering, non-negative intervals).
+numbering, non-negative intervals) — and three tests asserting the SQLite
+indexes exist and that the join-heavy queries actually use them
+(`EXPLAIN QUERY PLAN` shows an index seek, not a full table scan).
 
 ```bash
 pip install -r requirements-dev.txt
