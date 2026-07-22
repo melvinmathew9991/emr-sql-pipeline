@@ -6,6 +6,7 @@ Runs the full EMR analytics pipeline end to end:
   2. Run descriptive analytics SQL queries
   3. Build ML-ready cohort features via SQL joins + pandas
   4. Train and evaluate an in-hospital mortality prediction model
+  5. Train and evaluate a 30-day readmission prediction model
 
 Usage:
     python main.py
@@ -17,9 +18,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from build_database import build_database
-from queries import run_all_descriptive_queries
+from queries import run_all_descriptive_queries, readmission_target
 from cohort_features import build_cohort_features
 from mortality_model import prepare_model_matrix, train_and_evaluate
+import readmission_model
 
 # -----------------------------------------------------------------------
 # CONFIG — set USE_SYNTHETIC = False once you've downloaded the real data
@@ -57,6 +59,7 @@ def main():
     print("STEP 3: Building Cohort Feature Table (SQL joins + pandas)")
     print("=" * 70)
     features = build_cohort_features(conn)
+    readmit_target_df = readmission_target(conn)
     conn.close()
 
     print("\n" + "=" * 70)
@@ -64,6 +67,13 @@ def main():
     print("=" * 70)
     X, y, groups = prepare_model_matrix(features)
     train_and_evaluate(X, y, groups, save_dir=OUTPUT_DIR)
+
+    print("\n" + "=" * 70)
+    print("STEP 5: 30-Day Readmission Prediction Model")
+    print("=" * 70)
+    readmission_df = readmission_model.merge_target(features, readmit_target_df)
+    X_r, y_r, groups_r = readmission_model.prepare_model_matrix(readmission_df)
+    readmission_model.train_and_evaluate(X_r, y_r, groups_r, save_dir=OUTPUT_DIR)
 
     print("\n" + "=" * 70)
     print(f"Done. Database and plots saved to {OUTPUT_DIR}/")
