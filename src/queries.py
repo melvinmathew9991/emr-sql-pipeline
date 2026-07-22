@@ -45,6 +45,11 @@ def mortality_rate_by_careunit(conn: sqlite3.Connection) -> pd.DataFrame:
     return pd.read_sql_query(_load_sql("mortality_by_careunit.sql"), conn)
 
 
+def readmission_intervals(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Per-patient admission sequence number and days since that patient's last discharge."""
+    return pd.read_sql_query(_load_sql("readmission_intervals.sql"), conn)
+
+
 def mortality_significance_test(df: pd.DataFrame, label: str) -> None:
     """
     Chi-square test of independence on a mortality-by-group table: is the

@@ -5,6 +5,7 @@ from queries import (
     mortality_rate_by_admission_type,
     mortality_rate_by_careunit,
     mortality_significance_test,
+    readmission_intervals,
 )
 
 
@@ -37,3 +38,23 @@ def test_significance_test_runs_without_raising(conn, capsys):
     mortality_significance_test(df, "unit test grouping")
     captured = capsys.readouterr()
     assert "chi-square" in captured.out
+
+
+def test_readmission_intervals_first_admission_has_no_prior_interval(conn):
+    df = readmission_intervals(conn)
+    first_admissions = df[df["admission_seq"] == 1]
+    assert first_admissions["days_since_last_discharge"].isna().all()
+
+
+def test_readmission_intervals_sequence_increments_per_patient(conn):
+    df = readmission_intervals(conn)
+    repeat_patient = df["subject_id"].value_counts()
+    repeat_patient = repeat_patient[repeat_patient > 1].index[0]
+    seqs = df[df["subject_id"] == repeat_patient].sort_values("admittime")["admission_seq"].tolist()
+    assert seqs == list(range(1, len(seqs) + 1))
+
+
+def test_readmission_intervals_are_nonnegative_where_present(conn):
+    df = readmission_intervals(conn)
+    known = df["days_since_last_discharge"].dropna()
+    assert (known >= 0).all()

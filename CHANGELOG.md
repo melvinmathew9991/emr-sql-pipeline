@@ -241,6 +241,41 @@ reindexing one-hot columns so an unseen category degrades to all-zero
 dummies instead of raising. This was the direct answer to "how would you
 deploy this" — previously there was no way to score a new patient at all.
 
+### Phase 8 — Readmission-interval analysis (window functions)
+
+The descriptive-analytics side of the pipeline had five `GROUP BY` queries
+but nothing that reasoned across a single patient's admissions in sequence —
+a gap, since 14 patients in this cohort have more than one admission (one
+has 15) and readmission timing is a standard clinical quality metric.
+
+Added `sql/readmission_intervals.sql`: for every admission, `ROW_NUMBER()
+OVER (PARTITION BY subject_id ORDER BY admittime)` gives that patient's
+admission sequence number, and `LAG(dischtime) OVER (PARTITION BY
+subject_id ORDER BY admittime)` recovers their previous discharge time so
+`days_since_last_discharge` can be computed directly in SQL. First
+admissions get `NULL` by construction (no prior discharge exists), and
+because `LAG` only ever looks at that same patient's strictly earlier rows,
+the feature can't leak information from a later encounter into an earlier
+one — the same leakage discipline already applied to `lab_agg` in
+`cohort_features.sql`.
+
+Wired in as `queries.readmission_intervals()`, with three new tests
+(first-admission nulls, per-patient sequence numbering, non-negative
+intervals) — the suite is now 19 tests, up from 16.
+
+**Verified against the real MIMIC-III data**, not just the synthetic
+fixture: the cohort's most-readmitted patient (15 admissions) sequences
+correctly from 1–15, and across the full cohort, 11 of the 29 admissions
+that have a prior discharge fall within a 30-day interval — a real signal,
+consistent with the "Add readmission prediction" item previously listed
+under Future Extensions in the README.
+
+**Not yet done**: this only computes the interval feature; it isn't fed
+into `mortality_model.py` yet. Doing so would need the same scrutiny as
+the Phase 5 audit — deciding whether `days_since_last_discharge` at the
+time of a given admission is legitimately known then (it is, since it only
+depends on strictly prior admissions) before treating it as a predictor.
+
 ---
 
 ## 4. Still open (not fixed, know these going in)
@@ -249,6 +284,10 @@ From the Phase 5 audit, addressed in Phase 7: model persistence/inference,
 tests, and CI. Still not addressed:
 - **No survival/time-to-event framing** — mortality is technically censored;
   a static classifier sidesteps that. May belong in a separate project.
+- **Readmission intervals aren't fed into the model yet** — Phase 8 added
+  `days_since_last_discharge` as a queryable SQL feature, but it isn't wired
+  into `mortality_model.py`'s feature set or used to build a standalone
+  readmission classifier.
 - **Unused SQL-fetched columns** — `admission_location`, `insurance`,
   `ethnicity` are pulled by `cohort_features.sql` and then never analyzed or
   checked for subgroup/fairness performance.

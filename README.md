@@ -45,6 +45,8 @@ not a synthetic or toy dataset.
    - Length-of-stay distribution by care unit
    - Most common diagnoses in the cohort
    - In-hospital mortality rate by admission type and care unit
+   - Per-patient admission sequencing and readmission intervals (window
+     functions — see "SQL" below), available via `readmission_intervals()`
 
 3. **`cohort_features.py`** — builds a patient-level, ML-ready feature table by
    joining across admissions, ICU stays, diagnoses, and labs entirely in SQL,
@@ -97,6 +99,16 @@ inline strings:
   table join in this project happens in SQL — pandas is only used afterward
   for feature engineering (age capping, percentage calculations, filling
   nulls left by the joins), never to combine tables.
+- `readmission_intervals.sql` — the pipeline's window-function query.
+  `ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY admittime)` numbers
+  each patient's admissions in sequence, and `LAG(dischtime) OVER (PARTITION
+  BY subject_id ORDER BY admittime)` recovers their previous discharge time
+  so `days_since_last_discharge` can be computed per admission. A patient's
+  first admission gets `NULL` (no prior discharge), and because `LAG` only
+  looks at that same patient's strictly earlier rows, the value can't leak
+  information from a later encounter — verified against the real data: the
+  cohort's most-readmitted patient (15 admissions) sequences 1–15 correctly,
+  and 11 of 29 admissions with a prior discharge fall within 30 days.
 
 ## How to run
 
@@ -151,16 +163,18 @@ the baseline is real or noise.
 
 ## Tests & CI
 
-`tests/` has a small pytest suite (16 tests) run automatically on every push
+`tests/` has a small pytest suite (19 tests) run automatically on every push
 via GitHub Actions (`.github/workflows/tests.yml`) — the badge at the top of
 this README reflects the latest run. Tests run entirely against the
 synthetic fixture in `data/synthetic_test/` (the real MIMIC data is
 gitignored, so CI never needs it), covering all four pipeline stages, the
 leakage guard (`hospital_los_days` etc. can never silently reappear in the
-model's feature set), and a regression test for a real bug this project hit:
+model's feature set), a regression test for a real bug this project hit:
 `StratifiedGroupKFold` and the confusion matrix plot both broke on the
 synthetic fixture's tiny minority class (2 deaths) until the code was made to
-adapt `n_splits` accordingly.
+adapt `n_splits` accordingly — and three tests for the `readmission_intervals`
+window-function query (first-admission nulls, per-patient sequence
+numbering, non-negative intervals).
 
 ```bash
 pip install -r requirements-dev.txt
@@ -187,5 +201,7 @@ pre-flattening the data, since that's the skill EMR/RWD analytics roles expect.
 
 - Extend to lab-value trajectories (LABEVENTS is time-series; currently
   aggregated to summary statistics per admission)
-- Add readmission prediction (30-day readmission is a standard clinical ML task)
+- Feed `readmission_intervals.sql`'s `days_since_last_discharge` into
+  `mortality_model.py` as a real predictor (the query exists; it isn't wired
+  into the model yet) and/or build a standalone 30-day-readmission classifier
 - Compare against the full MIMIC-III database (requires PhysioNet credentialing)
