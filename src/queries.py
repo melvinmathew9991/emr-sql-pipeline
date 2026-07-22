@@ -50,6 +50,11 @@ def readmission_intervals(conn: sqlite3.Connection) -> pd.DataFrame:
     return pd.read_sql_query(_load_sql("readmission_intervals.sql"), conn)
 
 
+def readmission_target(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Per-admission 30-day readmission label via a forward-looking LEAD; NULL for in-hospital deaths and right-censored final admissions."""
+    return pd.read_sql_query(_load_sql("readmission_target.sql"), conn)
+
+
 def mortality_significance_test(df: pd.DataFrame, label: str) -> None:
     """
     Chi-square test of independence on a mortality-by-group table: is the

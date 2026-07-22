@@ -91,20 +91,33 @@ harder and benefits from having this in place first.
   rather than a plain nested-loop scan
 
 ## Sprint 6 — Readmission Risk Model
-**Status:** Planned
+**Status:** Done · corresponds to CHANGELOG Phase 10
 
 Goal: turn the readmission-interval feature into a second real predictive
 model, not just a queryable column.
 
-- Compute a genuine 30-day-readmission target with `LEAD(admittime)` (a
-  patient's *next* admission, not their last) so the label reflects a
-  future event knowable only in hindsight — a different leakage direction
-  than Sprint 5's backward-looking `LAG`, and worth auditing with the same
-  rigor as Sprint 3
-- Reuse the admission-time feature set and patient-grouped CV scheme from
-  `mortality_model.py`
-- New tests for the target construction and censoring behavior (a
-  patient's most recent admission has no future admission to check against)
+- Added `sql/readmission_target.sql`: a genuine 30-day-readmission target
+  with `LEAD(admittime)` (a patient's *next* admission, not their last) so
+  the label reflects a future event knowable only in hindsight — a
+  different leakage direction than Sprint 5's backward-looking `LAG`
+- Two "no next admission" cases left `NULL` rather than conflated into a
+  confirmed 0: in-hospital death (readmission never possible — dropped
+  from the modeling cohort entirely, not just NULL-labeled) vs.
+  right-censored (patient's most recent admission — dropped from the
+  training target only)
+- `readmission_model.py` reuses `mortality_model.py`'s exact admission-time
+  feature set and patient-grouped `StratifiedGroupKFold`/baseline/
+  `GridSearchCV` scheme; wired into `main.py` as Step 5
+- Verified against real data: 129 admissions → 40 deaths excluded, 29 of
+  the remaining 89 survivors have a non-censored label, 11 readmitted
+  within 30 days. Random Forest ROC-AUC 0.588 ± 0.378 vs. 0.483 ± 0.033
+  logistic baseline
+- On the synthetic fixture, excluding deaths/censored rows leaves zero
+  positive examples — `train_and_evaluate()` guards this single-class case
+  explicitly instead of letting `GridSearchCV` crash
+- 7 new tests (22 → 29 total): 3 for target censoring/death behavior, 4 for
+  the model (cohort filtering, shape alignment, the single-class guard, a
+  full train/plot/save run on a handcrafted two-class sample)
 
 ## Sprint 7 — Fairness & Explainability
 **Status:** Planned
