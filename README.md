@@ -1,11 +1,11 @@
-# Clinical EMR Data Pipeline & In-Hospital Mortality Prediction (MIMIC-III)
+# Clinical EMR Data Pipeline & In-Hospital Mortality / Readmission Prediction (MIMIC-III)
 
 [![Tests](https://github.com/melvinmathew9991/emr-sql-pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/melvinmathew9991/emr-sql-pipeline/actions/workflows/tests.yml)
 
 A SQL-first analytics pipeline on real electronic medical record (EMR) data,
 covering descriptive analytics (cohort characterization, length-of-stay,
-diagnosis patterns) and predictive analytics (in-hospital mortality prediction)
-using real de-identified ICU patient records.
+diagnosis patterns) and predictive analytics (in-hospital mortality and
+30-day readmission prediction) using real de-identified ICU patient records.
 
 ## Dataset
 
@@ -68,6 +68,13 @@ not a synthetic or toy dataset.
    pipeline can actually be used for inference, not just report metrics.
    Run with `python predict.py` after `main.py` has trained a model.
 
+6. **`readmission_model.py`** — a second predictive model, trained on the
+   same admission-time feature set and patient-grouped CV scheme as
+   `mortality_model.py`, predicting 30-day readmission (see "SQL" below for
+   the target's construction and censoring rules) instead of mortality.
+   Admissions ending in death are excluded from its cohort entirely, since
+   readmission was never possible for them.
+
 ## Avoiding leakage
 
 Two methodological issues are easy to miss in EMR modeling and are handled
@@ -112,6 +119,17 @@ inline strings:
   information from a later encounter — verified against the real data: the
   cohort's most-readmitted patient (15 admissions) sequences 1–15 correctly,
   and 11 of 29 admissions with a prior discharge fall within 30 days.
+- `readmission_target.sql` — the readmission model's target, built the
+  opposite direction from `readmission_intervals.sql`: `LEAD(admittime)
+  OVER (PARTITION BY subject_id ORDER BY admittime)` looks at each
+  patient's *next* admission, so `readmit_30d` is a genuinely
+  forward-looking label, knowable only in hindsight. Two distinct "no next
+  admission" cases are both left `NULL` rather than a confirmed 0 — death
+  this admission (readmission never possible) and right-censoring (most
+  recent admission in the dataset, true outcome unknown) — since
+  conflating them would teach a model the wrong thing. `readmission_model.py`
+  drops the death case from its cohort entirely and the censored case from
+  the training target.
 
 ## How to run
 
@@ -164,9 +182,21 @@ signal than the higher, invalid number. The full MIMIC-III database (thousands
 of admissions) would be needed to know whether the Random Forest's edge over
 the baseline is real or noise.
 
+**Readmission model:** same feature set and CV scheme, different target
+(`readmit_30d`) and cohort (the 40 admissions ending in death are excluded
+entirely). Of the 89 surviving admissions, 29 have a non-censored label and
+11 were readmitted within 30 days:
+- Random Forest ROC-AUC: **0.588 ± 0.378** (cross-validated)
+- Logistic regression baseline: 0.483 ± 0.033 (cross-validated)
+
+The wide standard deviation is the honest consequence of cross-validating
+on only 11 positive examples — each fold's score swings heavily depending
+on which few readmissions land in it. Reported as-is rather than smoothed
+over; the full MIMIC-III database would be needed for a stable estimate.
+
 ## Tests & CI
 
-`tests/` has a small pytest suite (22 tests) run automatically on every push
+`tests/` has a small pytest suite (29 tests) run automatically on every push
 via GitHub Actions (`.github/workflows/tests.yml`) — the badge at the top of
 this README reflects the latest run. Tests run entirely against the
 synthetic fixture in `data/synthetic_test/` (the real MIMIC data is
@@ -177,9 +207,17 @@ model's feature set), a regression test for a real bug this project hit:
 synthetic fixture's tiny minority class (2 deaths) until the code was made to
 adapt `n_splits` accordingly — three tests for the `readmission_intervals`
 window-function query (first-admission nulls, per-patient sequence
-numbering, non-negative intervals) — and three tests asserting the SQLite
+numbering, non-negative intervals) — three tests asserting the SQLite
 indexes exist and that the join-heavy queries actually use them
-(`EXPLAIN QUERY PLAN` shows an index seek, not a full table scan).
+(`EXPLAIN QUERY PLAN` shows an index seek, not a full table scan) — three
+tests for `readmission_target.sql`'s censoring behavior (label is NULL
+exactly when there's no next admission, death admissions never have one,
+the 30-day threshold is applied correctly) — and four tests for
+`readmission_model.py` (cohort/target filtering, shape alignment, a
+graceful skip on the synthetic fixture's single-class target rather than a
+`GridSearchCV` crash, and a full train/plot/save run against a handcrafted
+two-class sample since the real fixture has no positive examples to
+exercise that path with).
 
 ```bash
 pip install -r requirements-dev.txt
@@ -208,5 +246,8 @@ pre-flattening the data, since that's the skill EMR/RWD analytics roles expect.
   aggregated to summary statistics per admission)
 - Feed `readmission_intervals.sql`'s `days_since_last_discharge` into
   `mortality_model.py` as a real predictor (the query exists; it isn't wired
-  into the model yet) and/or build a standalone 30-day-readmission classifier
-- Compare against the full MIMIC-III database (requires PhysioNet credentialing)
+  into either model's feature set yet)
+- Compare against the full MIMIC-III database (requires PhysioNet
+  credentialing) — would give both models, especially the readmission one
+  (only 11 positive examples in the demo cohort), a far more stable AUC
+  estimate

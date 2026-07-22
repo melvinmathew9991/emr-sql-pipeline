@@ -276,6 +276,64 @@ the Phase 5 audit — deciding whether `days_since_last_discharge` at the
 time of a given admission is legitimately known then (it is, since it only
 depends on strictly prior admissions) before treating it as a predictor.
 
+### Phase 9 — SQL query indexing
+
+A targeted fix folded in ahead of Sprint 6, since its `LEAD(admittime)`
+readmission target hits `admissions`/`labevents` harder than the earlier
+descriptive queries and benefits from having this in place first.
+`build_database.py` now indexes every join/filter column `sql/*.sql`
+actually uses. Verified with `EXPLAIN QUERY PLAN` against the real data:
+`icustays` and `diagnoses_icd` switched from a full scan + temp B-tree sort
+to an index seek with no sort, and `labevents` switched from a full scan to
+an index search. 3 new tests (19 → 22 total).
+
+### Phase 10 — Readmission risk model (Sprint 6)
+
+Turned the readmission-interval *feature* from Phase 8 into a genuine
+second predictive model, with its own target rather than reusing
+`days_since_last_discharge`.
+
+Added `sql/readmission_target.sql`: for each admission, `LEAD(admittime)
+OVER (PARTITION BY subject_id ORDER BY admittime)` looks at that same
+patient's *next* admission — the opposite direction from Phase 8's
+backward-looking `LAG` — so `readmit_30d` is a genuinely forward-looking
+label, only knowable in hindsight. Two distinct "no next admission" cases
+are both left `NULL` rather than collapsed into a confirmed 0, since
+conflating them would teach a model the wrong thing:
+- **death this admission** (`hospital_expire_flag=1`) — readmission was
+  never possible, not merely unobserved. These admissions are dropped from
+  `readmission_model.py`'s cohort entirely, not just given a NULL label.
+- **right-censored** — the patient's most recent admission in this
+  dataset, with no later encounter to check against. Dropped from the
+  training target only.
+
+`readmission_model.py` reuses `mortality_model.py`'s exact admission-time
+feature set (`FEATURE_COLS_NUMERIC`/`FEATURE_COLS_CATEGORICAL`) and its
+patient-grouped `StratifiedGroupKFold` scheme, logistic-regression
+baseline, and `GridSearchCV`-tuned Random Forest — same rigor, different
+target. Wired into `main.py` as Step 5, running after the mortality model
+against the same feature table and a second `readmission_target()` query.
+
+**Verified against the real MIMIC-III data**: of 129 admissions, 40 end in
+death (excluded from the cohort) and 89 survive; of those, 29 have a known
+(non-censored) label and 11 fall within a 30-day readmission window — the
+same 29/11 split Phase 8 found from the other direction, as expected since
+both are counting the same consecutive-admission pairs. Random Forest
+ROC-AUC: 0.588 ± 0.378 (5-fold CV, grouped by patient) vs. a 0.483 ± 0.033
+logistic baseline — high variance given only 11 positive examples, and
+reported honestly rather than smoothed over.
+
+On the small synthetic fixture, excluding deaths and censored rows leaves
+*zero* admissions readmitted within 30 days — a single-class target no
+classifier can fit. `train_and_evaluate()` guards this explicitly (checks
+`y.nunique() < 2` up front, prints why, returns without raising or writing
+outputs) rather than letting `GridSearchCV` crash. Since the real fixture
+can't exercise the actual training path, a handcrafted two-class sample
+covers that instead. 7 new tests (22 → 29 total): 3 for the target's
+censoring/death behavior in `queries.py`, 4 for the model (cohort
+filtering, shape alignment, the single-class guard, and a full train/plot/
+save run on synthetic two-class data).
+
 ---
 
 ## 4. Still open (not fixed, know these going in)
@@ -284,10 +342,11 @@ From the Phase 5 audit, addressed in Phase 7: model persistence/inference,
 tests, and CI. Still not addressed:
 - **No survival/time-to-event framing** — mortality is technically censored;
   a static classifier sidesteps that. May belong in a separate project.
-- **Readmission intervals aren't fed into the model yet** — Phase 8 added
-  `days_since_last_discharge` as a queryable SQL feature, but it isn't wired
-  into `mortality_model.py`'s feature set or used to build a standalone
-  readmission classifier.
+- **`days_since_last_discharge` still isn't a model feature** — Phase 10
+  built a standalone readmission classifier (closing the second half of
+  this gap), but it predicts a separate `readmit_30d` target from the same
+  admission-time features as the mortality model; the Phase 8 interval
+  itself isn't used as a predictor anywhere.
 - **Unused SQL-fetched columns** — `admission_location`, `insurance`,
   `ethnicity` are pulled by `cohort_features.sql` and then never analyzed or
   checked for subgroup/fairness performance.
@@ -303,10 +362,13 @@ tests, and CI. Still not addressed:
 
 - **"Walk me through this project."** SQL-first EMR pipeline on real
   MIMIC-III ICU data — SQLite build, 5 descriptive SQL queries, a
-  SQL-CTE-joined feature table, and a mortality classifier evaluated with
-  patient-grouped cross-validation.
-- **"What's your best result?"** ROC-AUC 0.606 ± 0.107, cross-validated,
-  vs. a 0.510 ± 0.154 logistic baseline — modest, but honest.
+  SQL-CTE-joined feature table, and two classifiers (in-hospital mortality,
+  30-day readmission) evaluated with patient-grouped cross-validation.
+- **"What's your best result?"** Mortality: ROC-AUC 0.606 ± 0.107,
+  cross-validated, vs. a 0.510 ± 0.154 logistic baseline. Readmission:
+  0.588 ± 0.378 vs. a 0.483 ± 0.033 baseline — both modest, and the
+  readmission variance is reported honestly rather than smoothed over
+  (only 11 positive examples in the real cohort).
 - **"What was the hardest part?"** Catching that my own first version had
   target leakage (whole-stay LOS/diagnosis features) and patient-level
   leakage (repeat patients split across train/test) — the initial 0.770 AUC
@@ -319,6 +381,6 @@ tests, and CI. Still not addressed:
   `outputs/mortality_model.joblib`, and `predict.py` loads it to score a new
   admission from raw fields. Next step for real deployment would be wrapping
   that in an API, adding input validation, and monitoring for feature drift.
-- **"How do you know the pipeline actually works?"** 16 pytest tests, run on
+- **"How do you know the pipeline actually works?"** 29 pytest tests, run on
   every push via GitHub Actions — including a regression guard that fails
   the build if the leaky columns are ever reintroduced as model features.
